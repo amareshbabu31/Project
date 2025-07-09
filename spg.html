@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Password Generator</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts - Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global Firebase instances (will be initialized later)
+        window.firebaseApp = null;
+        window.db = null;
+        window.auth = null;
+        window.currentUserId = null;
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                // Initialize Firebase App
+                const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+                window.firebaseApp = initializeApp(firebaseConfig);
+                window.db = getFirestore(window.firebaseApp);
+                window.auth = getAuth(window.firebaseApp);
+
+                // Authenticate user
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(window.auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(window.auth);
+                }
+
+                // Listen for auth state changes to get the user ID
+                onAuthStateChanged(window.auth, (user) => {
+                    if (user) {
+                        window.currentUserId = user.uid;
+                        document.getElementById('userIdDisplay').textContent = `User ID: ${window.currentUserId}`;
+                        console.log("Firebase initialized and user authenticated:", window.currentUserId);
+                        // Once authenticated, start listening for passwords
+                        loadSavedPasswords();
+                    } else {
+                        console.log("No user signed in.");
+                        document.getElementById('userIdDisplay').textContent = 'User ID: Not authenticated';
+                    }
+                });
+
+            } catch (error) {
+                console.error("Error initializing Firebase or authenticating:", error);
+                document.getElementById('userIdDisplay').textContent = `Error: ${error.message}`;
+            }
+        });
+
+        // Function to save password to Firestore
+        window.savePasswordToFirestore = async (password) => {
+            if (!window.db || !window.currentUserId) {
+                console.error("Firestore not initialized or user not authenticated.");
+                showMessageBox('saveMessageBox', 'Error: Not authenticated to save password.', true);
+                return;
+            }
+
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const passwordsCollectionRef = collection(window.db, `artifacts/${appId}/users/${window.currentUserId}/passwords`);
+
+            try {
+                await addDoc(passwordsCollectionRef, {
+                    password: password,
+                    date: new Date().toISOString(), // Store as ISO string for easy sorting/display
+                    timestamp: Date.now() // Store timestamp for sorting
+                });
+                console.log("Password saved successfully!");
+                showMessageBox('saveMessageBox', 'Password saved successfully!');
+            } catch (e) {
+                console.error("Error adding document: ", e);
+                showMessageBox('saveMessageBox', `Error saving password: ${e.message}`, true);
+            }
+        };
+
+        // Function to load saved passwords from Firestore
+        window.loadSavedPasswords = () => {
+            if (!window.db || !window.currentUserId) {
+                console.warn("Firestore not initialized or user not authenticated. Cannot load passwords.");
+                return;
+            }
+
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const passwordsCollectionRef = collection(window.db, `artifacts/${appId}/users/${window.currentUserId}/passwords`);
+            // Note: orderBy is commented out as per instructions to avoid index issues.
+            // Data will be sorted in memory.
+            const q = query(passwordsCollectionRef); // Removed orderBy
+
+            onSnapshot(q, (snapshot) => {
+                const passwordsList = document.getElementById('savedPasswordsList');
+                passwordsList.innerHTML = ''; // Clear existing list
+                const savedPasswords = [];
+                snapshot.forEach((doc) => {
+                    savedPasswords.push({ id: doc.id, ...doc.data() });
+                });
+
+                // Sort in memory by timestamp (newest first)
+                savedPasswords.sort((a, b) => b.timestamp - a.timestamp);
+
+                if (savedPasswords.length === 0) {
+                    passwordsList.innerHTML = '<li class="text-gray-500">No saved passwords yet.</li>';
+                } else {
+                    savedPasswords.forEach(data => {
+                        const listItem = document.createElement('li');
+                        listItem.className = 'bg-gray-100 p-3 rounded-lg flex justify-between items-center text-gray-700 text-sm break-all';
+                        const passwordText = document.createElement('span');
+                        passwordText.textContent = `${data.password} (Saved: ${new Date(data.date).toLocaleString()})`;
+                        listItem.appendChild(passwordText);
+
+                        const copyBtn = document.createElement('button');
+                        copyBtn.textContent = 'Copy';
+                        copyBtn.className = 'ml-2 px-3 py-1 bg-indigo-500 text-white rounded-md hover:bg-indigo-600 transition-colors text-xs';
+                        copyBtn.onclick = () => copyToClipboard(data.password, document.getElementById('copySavedMessageBox'));
+                        listItem.appendChild(copyBtn);
+
+                        passwordsList.appendChild(listItem);
+                    });
+                }
+            }, (error) => {
+                console.error("Error listening to passwords:", error);
+                document.getElementById('savedPasswordsList').innerHTML = `<li class="text-red-500">Error loading passwords: ${error.message}</li>`;
+            });
+        };
+
+        // Helper function for message boxes
+        function showMessageBox(id, message, isError = false) {
+            const msgBox = document.getElementById(id);
+            msgBox.textContent = message;
+            msgBox.className = `message-box ${isError ? '!bg-red-100 !text-red-900' : '!bg-green-100 !text-green-900'}`;
+            msgBox.style.display = 'block';
+            setTimeout(() => {
+                msgBox.style.display = 'none';
+            }, 3000);
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .container {
+            background-color: #ffffff;
+            border-radius: 1rem; /* rounded-xl */
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            padding: 2.5rem; /* p-10 */
+            width: 100%;
+            max-width: 600px;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem; /* gap-6 */
+        }
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem; /* gap-2 */
+        }
+        .checkbox-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem; /* gap-4 */
+        }
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem; /* gap-2 */
+        }
+        .button-primary {
+            background-color: #4f46e5; /* indigo-600 */
+            color: white;
+            padding: 0.75rem 1.5rem; /* py-3 px-6 */
+            border-radius: 0.5rem; /* rounded-lg */
+            font-weight: 600; /* font-semibold */
+            transition: background-color 0.2s;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .button-primary:hover {
+            background-color: #4338ca; /* indigo-700 */
+        }
+        .button-secondary {
+            background-color: #e0e7ff; /* indigo-100 */
+            color: #4f46e5; /* indigo-600 */
+            padding: 0.75rem 1.5rem; /* py-3 px-6 */
+            border-radius: 0.5rem; /* rounded-lg */
+            font-weight: 600; /* font-semibold */
+            transition: background-color 0.2s;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        }
+        .button-secondary:hover {
+            background-color: #c7d2fe; /* indigo-200 */
+        }
+        .password-display {
+            background-color: #e2e8f0; /* slate-200 */
+            padding: 1rem; /* p-4 */
+            border-radius: 0.5rem; /* rounded-lg */
+            font-size: 1.25rem; /* text-xl */
+            font-weight: 500; /* font-medium */
+            text-align: center;
+            word-break: break-all;
+            position: relative;
+        }
+        .copy-button {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            background-color: #6366f1; /* indigo-500 */
+            color: white;
+            padding: 0.5rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-size: 0.875rem; /* text-sm */
+            line-height: 1;
+            transition: background-color 0.2s;
+        }
+        .copy-button:hover {
+            background-color: #4f46e5; /* indigo-600 */
+        }
+        .message-box {
+            background-color: #d1fae5; /* green-100 */
+            color: #065f46; /* green-900 */
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            margin-top: 1rem;
+            text-align: center;
+            display: none; /* Hidden by default */
+        }
+        input[type="range"] {
+            width: 100%;
+            -webkit-appearance: none;
+            height: 8px;
+            background: #e0e7ff; /* indigo-100 */
+            border-radius: 5px;
+            outline: none;
+            opacity: 0.7;
+            transition: opacity .2s;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #4f46e5; /* indigo-600 */
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: #4f46e5; /* indigo-600 */
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        .loader {
+            border: 4px solid #f3f3f3; /* Light grey */
+            border-top: 4px solid #4f46e5; /* Blue */
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            display: none; /* Hidden by default */
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-3xl font-bold text-center text-gray-800">Secure Password Generator</h1>
+
+        <p id="userIdDisplay" class="text-center text-sm text-gray-600 mb-4">User ID: Loading...</p>
+
+        <!-- Password Generation Section -->
+        <div class="input-group">
+            <label for="passwordLength" class="text-lg font-medium text-gray-700">Password Length: <span id="lengthValue">12</span></label>
+            <input type="range" id="passwordLength" min="6" max="64" value="12" class="w-full">
+        </div>
+
+        <div class="input-group">
+            <label class="text-lg font-medium text-gray-700">Character Types:</label>
+            <div class="checkbox-group">
+                <div class="checkbox-item">
+                    <input type="checkbox" id="includeUppercase" checked class="rounded text-indigo-600 focus:ring-indigo-500">
+                    <label for="includeUppercase" class="text-gray-600">Uppercase (A-Z)</label>
+                </div>
+                <div class="checkbox-item">
+                    <input type="checkbox" id="includeLowercase" checked class="rounded text-indigo-600 focus:ring-indigo-500">
+                    <label for="includeLowercase" class="text-gray-600">Lowercase (a-z)</label>
+                </div>
+                <div class="checkbox-item">
+                    <input type="checkbox" id="includeNumbers" checked class="rounded text-indigo-600 focus:ring-indigo-500">
+                    <label for="includeNumbers" class="text-gray-600">Numbers (0-9)</label>
+                </div>
+                <div class="checkbox-item">
+                    <input type="checkbox" id="includeSymbols" class="rounded text-indigo-600 focus:ring-indigo-500">
+                    <label for="includeSymbols" class="text-gray-600">Symbols (!@#$%^&*)</label>
+                </div>
+            </div>
+        </div>
+
+        <button id="generatePasswordBtn" class="button-primary">Generate Password</button>
+
+        <div class="password-display mt-4">
+            <span id="generatedPassword">Your secure password will appear here</span>
+            <button id="copyPasswordBtn" class="copy-button">Copy</button>
+        </div>
+        <div id="copyMessageBox" class="message-box">Password copied to clipboard!</div>
+
+        <button id="savePasswordBtn" class="button-secondary mt-4">Save Password</button>
+        <div id="saveMessageBox" class="message-box"></div>
+
+        <hr class="my-6 border-gray-300">
+
+        <!-- Saved Passwords Section -->
+        <h2 class="text-2xl font-bold text-center text-gray-800">Saved Passwords</h2>
+        <div id="savedPasswordsContainer" class="mt-4">
+            <ul id="savedPasswordsList" class="space-y-3">
+                <li class="text-gray-500 text-center">Loading saved passwords...</li>
+            </ul>
+            <div id="copySavedMessageBox" class="message-box">Password copied from list!</div>
+        </div>
+
+    </div>
+
+    <script>
+        // DOM Elements
+        const passwordLengthInput = document.getElementById('passwordLength');
+        const lengthValueSpan = document.getElementById('lengthValue');
+        const includeUppercaseCheckbox = document.getElementById('includeUppercase');
+        const includeLowercaseCheckbox = document.getElementById('includeLowercase');
+        const includeNumbersCheckbox = document.getElementById('includeNumbers');
+        const includeSymbolsCheckbox = document.getElementById('includeSymbols');
+        const generatePasswordBtn = document.getElementById('generatePasswordBtn');
+        const generatedPasswordSpan = document.getElementById('generatedPassword');
+        const copyPasswordBtn = document.getElementById('copyPasswordBtn');
+        const copyMessageBox = document.getElementById('copyMessageBox');
+        const savePasswordBtn = document.getElementById('savePasswordBtn');
+        const saveMessageBox = document.getElementById('saveMessageBox');
+
+
+        // Character sets
+        const uppercaseChars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        const lowercaseChars = 'abcdefghijklmnopqrstuvwxyz';
+        const numberChars = '0123456789';
+        const symbolChars = '!@#$%^&*()_+[]{}|;:,.<>?';
+
+        // Update length value display
+        passwordLengthInput.addEventListener('input', () => {
+            lengthValueSpan.textContent = passwordLengthInput.value;
+        });
+
+        // Function to generate password
+        function generatePassword() {
+            let characterPool = '';
+            if (includeUppercaseCheckbox.checked) characterPool += uppercaseChars;
+            if (includeLowercaseCheckbox.checked) characterPool += lowercaseChars;
+            if (includeNumbersCheckbox.checked) characterPool += numberChars;
+            if (includeSymbolsCheckbox.checked) characterPool += symbolChars;
+
+            if (characterPool.length === 0) {
+                generatedPasswordSpan.textContent = 'Select at least one character type!';
+                return;
+            }
+
+            const passwordLength = parseInt(passwordLengthInput.value);
+            let password = '';
+            const randomBytes = new Uint32Array(passwordLength);
+            window.crypto.getRandomValues(randomBytes); // Use cryptographically secure random number generator
+
+            for (let i = 0; i < passwordLength; i++) {
+                const randomIndex = randomBytes[i] % characterPool.length;
+                password += characterPool.charAt(randomIndex);
+            }
+            generatedPasswordSpan.textContent = password;
+        }
+
+        // Event listener for generate password button
+        generatePasswordBtn.addEventListener('click', generatePassword);
+
+        // Initial password generation on load
+        generatePassword();
+
+        // Function to copy text to clipboard
+        function copyToClipboard(text, messageBoxElement) {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed'; // Avoid scrolling to bottom
+            textarea.style.opacity = 0;
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                document.execCommand('copy');
+                messageBoxElement.style.display = 'block';
+                setTimeout(() => {
+                    messageBoxElement.style.display = 'none';
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to copy text: ', err);
+            } finally {
+                document.body.removeChild(textarea);
+            }
+        }
+
+        // Event listener for copy password button
+        copyPasswordBtn.addEventListener('click', () => {
+            copyToClipboard(generatedPasswordSpan.textContent, copyMessageBox);
+        });
+
+        // Event listener for save password button
+        savePasswordBtn.addEventListener('click', () => {
+            const passwordToSave = generatedPasswordSpan.textContent;
+            if (passwordToSave && passwordToSave !== 'Your secure password will appear here' && passwordToSave !== 'Select at least one character type!') {
+                window.savePasswordToFirestore(passwordToSave);
+            } else {
+                showMessageBox('saveMessageBox', 'Nothing to save. Generate a password first!', true);
+            }
+        });
+
+        // Helper function for message boxes (redefined here for scope, but also globally available from module script)
+        function showMessageBox(id, message, isError = false) {
+            const msgBox = document.getElementById(id);
+            msgBox.textContent = message;
+            msgBox.className = `message-box ${isError ? '!bg-red-100 !text-red-900' : '!bg-green-100 !text-green-900'}`;
+            msgBox.style.display = 'block';
+            setTimeout(() => {
+                msgBox.style.display = 'none';
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
